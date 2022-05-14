@@ -142,6 +142,8 @@ if __name__ == "__main__":
                 if git_manual.returncode == 0 and which("git", path=os.environ["PATH"]):
                     git_path = which("git", path=os.environ["PATH"])  # type: ignore
                     logger.info("Git successfully installed")
+                    logger.info("Cleaning up Git installer...")
+                    os.remove(git_installer_name)
                 else:
                     logger.error(
                         "Failed to install Git, install manually from"
@@ -208,7 +210,6 @@ if __name__ == "__main__":
             )
             sys.exit(1)
 
-    sdkmanager_path = "sdkmanager"
     if (
         input(
             "Do you want to install Android SDK, Android SDK Command-line Tools, and"
@@ -265,6 +266,8 @@ if __name__ == "__main__":
                     )
                 else:
                     logger.info("Skipping Android command line tools installation")
+            logger.info("Cleaning up Android command line tools installer...")
+            os.remove(commandlinetools_installer_name)
             logger.info("Attempting to update PATH...")
             u_env = winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment")
             path_update = subprocess.run(
@@ -286,7 +289,6 @@ if __name__ == "__main__":
                 )
             update_path()
             if which("sdkmanager.bat", path=os.environ["PATH"]):
-                sdkmanager_path = which("sdkmanager", path=os.environ["PATH"])  # type: ignore
                 logger.info("Android command line tools successfully installed")
             else:
                 logger.error(
@@ -296,9 +298,54 @@ if __name__ == "__main__":
                 )
                 sys.exit(1)
 
-            # TODO: Add installation of Android SDK and related tools using sdkmanager
-
+            logger.info(
+                "Attempting to install Android platform-tools, platforms;android-32,"
+                " build-tools;32.0.0, emulator..."
+            )
+            sdkmanager_install = subprocess.run(
+                [
+                    f"{sdk_dir / 'cmdline-tools' / 'latest' / 'bin' / 'sdkmanager.bat'}",
+                    "--install",
+                    "platform-tools",
+                    "platforms;android-32",
+                    "build-tools;32.0.0",
+                    "emulator",
+                ]
+            )
+            if sdkmanager_install.returncode == 0:
+                logger.info(
+                    "Android platform-tools, platforms;android-32, build-tools;32.0.0,"
+                    " emulator successfully installed"
+                )
+            else:
+                logger.error(
+                    "Failed to install Android command line tools, please continue"
+                    " install manually:"
+                    " https://docs.flutter.dev/get-started/install/windows#android-setup"
+                )
+                sys.exit(1)
+            sdkmanager_update = subprocess.run(
+                [
+                    f"{sdk_dir / 'cmdline-tools' / 'latest' / 'bin' / 'sdkmanager.bat'}",
+                    "--update",
+                ]
+            )
+            if sdkmanager_update.returncode == 0:
+                logger.info("Android toolchain successfully updated")
     else:
         logger.info("Skipping Android toolchain installation")
+
+    android_licenses = subprocess.run([flutter_path, "doctor", "--android-licenses"])
+    if android_licenses.returncode == 0:
+        logger.info("Android licenses successfully accepted")
+    else:
+        logger.error(
+            "Failed to accept Android licenses (may need Java installation), please"
+            " continue manually:"
+            " https://docs.flutter.dev/get-started/install/windows#agree-to-android-licenses"
+        )
+
+    logger.info("Installation completed, running flutter doctor...")
+    subprocess.run([flutter_path, "doctor"])
 
     input("Press enter to exit...")
