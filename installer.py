@@ -4,9 +4,11 @@ import os
 import re
 import subprocess
 import sys
-from turtle import update
 import urllib.request
-from shutil import which
+import winreg
+import zipfile
+from pathlib import Path
+from shutil import rmtree, which
 
 import requests
 from tqdm import tqdm
@@ -104,7 +106,7 @@ if __name__ == "__main__":
             ["winget", "install", "--id", "Git.Git", "-e", "--source", "winget"]
         )
         update_path()
-        if git_winget == 0 and which("git", path=os.environ["PATH"]):
+        if git_winget.returncode == 0 and which("git", path=os.environ["PATH"]):
             git_path = which("git", path=os.environ["PATH"])  # type: ignore
             logger.info("Git successfully installed with winget")
         else:
@@ -115,12 +117,12 @@ if __name__ == "__main__":
             git_release = requests.get(
                 "https://github.com/git-for-windows/git/releases/latest"
             )
-            git_install_re = re.search(
+            git_installer_re = re.search(
                 r"(/git-for-windows/git/releases/download/(\S*)64-bit\.exe)",
                 git_release.text,
             )
-            if git_install_re is not None:
-                git_installer_url = f"https://github.com{git_install_re.group()}"
+            if git_installer_re is not None:
+                git_installer_url = f"https://github.com{git_installer_re.group()}"
                 git_installer_name = git_installer_url.split("/")[-1]
                 with TqdmUpTo(
                     unit="B",
@@ -137,7 +139,7 @@ if __name__ == "__main__":
                     t.total = t.n
                 git_manual = subprocess.run([git_installer_name])
                 update_path()
-                if git_manual == 0 and which("git", path=os.environ["PATH"]):
+                if git_manual.returncode == 0 and which("git", path=os.environ["PATH"]):
                     git_path = which("git", path=os.environ["PATH"])  # type: ignore
                     logger.info("Git successfully installed")
                 else:
@@ -152,6 +154,8 @@ if __name__ == "__main__":
                     " https://git-scm.com/download/win and try running again"
                 )
                 sys.exit(1)
+
+    logger.info("Checking for Flutter...")
 
     flutter_path = "flutter"
     update_path()
@@ -172,22 +176,129 @@ if __name__ == "__main__":
         )
         logger.info("Cloned Flutter to C:\\src\\flutter")
         logger.info("Attempting to update PATH...")
-        subprocess.run(
+        m_env = winreg.OpenKey(
+            winreg.HKEY_LOCAL_MACHINE,
+            "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+        )
+        path_update = subprocess.run(
             [
                 "pwsh",
                 "-c",
                 '[Environment]::SetEnvironmentVariable("Path",'
-                ' [Environment]::GetEnvironmentVariable("Path",'
-                ' [EnvironmentVariableTarget]::Machine) + ";C:\\src\\flutter\\bin",'
+                f' "{winreg.QueryValueEx(m_env, "Path")[0]};C:\\src\\flutter\\bin",'
                 " [System.EnvironmentVariableTarget]::Machine)",
             ]
         )
-        logger.info("Updated PATH")
+        m_env.Close()
+        if path_update.returncode == 0:
+            logger.info("Updated PATH")
+        else:
+            logger.warning(
+                "Failed to update PATH, may be caused by permission issues, please"
+                " update PATH manually"
+            )
         update_path()
         if which("flutter", path=os.environ["PATH"]):
             flutter_path = which("flutter", path=os.environ["PATH"])  # type: ignore
             logger.info("Flutter SDK successfully installed")
+        else:
+            logger.error(
+                "Failed to install Flutter SDK, please install manually:"
+                " https://docs.flutter.dev/get-started/install/windows"
+            )
+            sys.exit(1)
 
-    # TODO: Add installation of Android SDK and related tools
+    sdkmanager_path = "sdkmanager"
+    if (
+        input(
+            "Do you want to install Android SDK, Android SDK Command-line Tools, and"
+            " Android SDK Build-Tools (only install if you do not already have it"
+            " installed; if unsure, do not install and opt for manual installation"
+            " instead)? [y/N] "
+        ).lower()
+        == "y"
+    ):
+        logger.info("Attempting to install Android toolchain..")
+        logger.info("Downloading Android command line tools...")
+        studio_page = requests.get("https://developer.android.com/studio")
+        commandlinetools_installer_re = re.search(
+            r"(commandlinetools-win-(\S*)_latest.zip)",
+            studio_page.text,
+        )
+        if commandlinetools_installer_re is not None:
+            commandlinetools_installer_url = f"https://dl.google.com/android/repository/{commandlinetools_installer_re.group()}"
+            commandlinetools_installer_name = commandlinetools_installer_url.split("/")[
+                -1
+            ]
+            with TqdmUpTo(
+                unit="B",
+                unit_scale=True,
+                unit_divisor=1024,
+                miniters=1,
+                desc=commandlinetools_installer_name,
+            ) as t:
+                urllib.request.urlretrieve(
+                    commandlinetools_installer_url,
+                    commandlinetools_installer_name,
+                    reporthook=t.update_to,
+                )
+                t.total = t.n
+            sdk_dir = Path(os.path.expandvars("%LOCALAPPDATA%\\Android\\Sdk"))
+            logger.info(
+                "Downloaded Android command line tools, attempting to unzip to"
+                f" {sdk_dir}"
+            )
+            logger.debug(f"Creating {sdk_dir} if not exists")
+            sdk_dir.mkdir(parents=True, exist_ok=True)
+            logger.debug(f"Unzipping {commandlinetools_installer_name} to {sdk_dir}")
+            if (sdk_dir / "cmdline-tools").exists():
+                logger.warning(
+                    f"{sdk_dir / 'cmdline-tools'} already exists, overwrite? [y/N]"
+                )
+                if input().lower() == "y":
+                    rmtree(sdk_dir / "cmdline-tools")
+                    (sdk_dir / "cmdline-tools").mkdir(parents=True, exist_ok=True)
+                    with zipfile.ZipFile(commandlinetools_installer_name) as z:
+                        z.extractall(sdk_dir / "cmdline-tools")
+                    (sdk_dir / "cmdline-tools" / "cmdline-tools").rename(
+                        sdk_dir / "cmdline-tools" / "latest"
+                    )
+                else:
+                    logger.info("Skipping Android command line tools installation")
+            logger.info("Attempting to update PATH...")
+            u_env = winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment")
+            path_update = subprocess.run(
+                [
+                    "pwsh",
+                    "-c",
+                    '[Environment]::SetEnvironmentVariable("Path",'
+                    f' "{winreg.QueryValueEx(u_env, "Path")[0]};%LocalAppData%\\Android\\Sdk\\cmdline-tools\\latest\\bin",'
+                    " [System.EnvironmentVariableTarget]::User)",
+                ]
+            )
+            u_env.Close()
+            if path_update.returncode == 0:
+                logger.info("Updated PATH")
+            else:
+                logger.warning(
+                    "Failed to update PATH, may be caused by permission issues, please"
+                    " update PATH manually"
+                )
+            update_path()
+            if which("sdkmanager.bat", path=os.environ["PATH"]):
+                sdkmanager_path = which("sdkmanager", path=os.environ["PATH"])  # type: ignore
+                logger.info("Android command line tools successfully installed")
+            else:
+                logger.error(
+                    "Failed to install Android command line tools, please continue"
+                    " install manually:"
+                    " https://docs.flutter.dev/get-started/install/windows#android-setup"
+                )
+                sys.exit(1)
+
+            # TODO: Add installation of Android SDK and related tools using sdkmanager
+
+    else:
+        logger.info("Skipping Android toolchain installation")
 
     input("Press enter to exit...")
