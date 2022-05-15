@@ -69,6 +69,38 @@ def update_path():
     ).stdout.decode("utf-8")
 
 
+def append_to_path(path, env="user"):
+    if env == "machine":
+        m_env = winreg.OpenKey(
+            winreg.HKEY_LOCAL_MACHINE,
+            "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+        )
+        path_update = subprocess.run(
+            [
+                "pwsh",
+                "-c",
+                '[Environment]::SetEnvironmentVariable("Path",'
+                f' "{winreg.QueryValueEx(m_env, "Path")[0]};{path}",'
+                " [System.EnvironmentVariableTarget]::Machine)",
+            ]
+        )
+        m_env.Close()
+        return path_update
+    elif env == "user":
+        u_env = winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment")
+        path_update = subprocess.run(
+            [
+                "pwsh",
+                "-c",
+                '[Environment]::SetEnvironmentVariable("Path",'
+                f' "{winreg.QueryValueEx(u_env, "Path")[0]};{path}",'
+                " [System.EnvironmentVariableTarget]::User)",
+            ]
+        )
+        u_env.Close()
+        return path_update
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="A simple Windows installer for Flutter development tools"
@@ -100,6 +132,7 @@ if __name__ == "__main__":
     if which("git", path=os.environ["PATH"]):
         git_path = which("git", path=os.environ["PATH"])  # type: ignore
         logger.info("Git found")
+
     else:
         logger.info("Attempting to install Git with winget...")
         git_winget = subprocess.run(
@@ -109,6 +142,7 @@ if __name__ == "__main__":
         if git_winget.returncode == 0 and which("git", path=os.environ["PATH"]):
             git_path = which("git", path=os.environ["PATH"])  # type: ignore
             logger.info("Git successfully installed with winget")
+
         else:
             logger.warning(
                 "Failed to install Git with winget (perhaps winget not installed?),"
@@ -149,12 +183,15 @@ if __name__ == "__main__":
                         "Failed to install Git, install manually from"
                         " https://git-scm.com/download/win and try running again"
                     )
+                    input("Press enter to exit...")
                     sys.exit(1)
+
             else:
                 logger.error(
                     "Failed to install Git, install manually from"
                     " https://git-scm.com/download/win and try running again"
                 )
+                input("Press enter to exit...")
                 sys.exit(1)
 
     logger.info("Checking for Flutter...")
@@ -164,6 +201,7 @@ if __name__ == "__main__":
     if which("flutter", path=os.environ["PATH"]):
         flutter_path = which("flutter", path=os.environ["PATH"])  # type: ignore
         logger.info("Flutter SDK is already installed, skipping...")
+
     else:
         logger.info("Attempting to clone Flutter in C:\\src...")
         subprocess.run(
@@ -177,21 +215,9 @@ if __name__ == "__main__":
             ]
         )
         logger.info("Cloned Flutter to C:\\src\\flutter")
+
         logger.info("Attempting to update PATH...")
-        m_env = winreg.OpenKey(
-            winreg.HKEY_LOCAL_MACHINE,
-            "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
-        )
-        path_update = subprocess.run(
-            [
-                "pwsh",
-                "-c",
-                '[Environment]::SetEnvironmentVariable("Path",'
-                f' "{winreg.QueryValueEx(m_env, "Path")[0]};C:\\src\\flutter\\bin",'
-                " [System.EnvironmentVariableTarget]::Machine)",
-            ]
-        )
-        m_env.Close()
+        path_update = append_to_path("C:\\src\\flutter\\bin", "machine")
         if path_update.returncode == 0:
             logger.info("Updated PATH")
         else:
@@ -208,6 +234,7 @@ if __name__ == "__main__":
                 "Failed to install Flutter SDK, please install manually:"
                 " https://docs.flutter.dev/get-started/install/windows"
             )
+            input("Press enter to exit...")
             sys.exit(1)
 
     if (
@@ -222,28 +249,27 @@ if __name__ == "__main__":
         logger.info("Attempting to install Android toolchain..")
         logger.info("Downloading Android command line tools...")
         studio_page = requests.get("https://developer.android.com/studio")
-        commandlinetools_installer_re = re.search(
+        cmdlinetools_installer_re = re.search(
             r"(commandlinetools-win-(\S*)_latest.zip)",
             studio_page.text,
         )
-        if commandlinetools_installer_re is not None:
-            commandlinetools_installer_url = f"https://dl.google.com/android/repository/{commandlinetools_installer_re.group()}"
-            commandlinetools_installer_name = commandlinetools_installer_url.split("/")[
-                -1
-            ]
+        if cmdlinetools_installer_re is not None:
+            cmdlinetools_installer_url = f"https://dl.google.com/android/repository/{cmdlinetools_installer_re.group()}"
+            cmdlinetools_installer_name = cmdlinetools_installer_url.split("/")[-1]
             with TqdmUpTo(
                 unit="B",
                 unit_scale=True,
                 unit_divisor=1024,
                 miniters=1,
-                desc=commandlinetools_installer_name,
+                desc=cmdlinetools_installer_name,
             ) as t:
                 urllib.request.urlretrieve(
-                    commandlinetools_installer_url,
-                    commandlinetools_installer_name,
+                    cmdlinetools_installer_url,
+                    cmdlinetools_installer_name,
                     reporthook=t.update_to,
                 )
                 t.total = t.n
+
             sdk_dir = Path(os.path.expandvars("%LOCALAPPDATA%\\Android\\Sdk"))
             logger.info(
                 "Downloaded Android command line tools, attempting to unzip to"
@@ -251,7 +277,7 @@ if __name__ == "__main__":
             )
             logger.debug(f"Creating {sdk_dir} if not exists")
             sdk_dir.mkdir(parents=True, exist_ok=True)
-            logger.debug(f"Unzipping {commandlinetools_installer_name} to {sdk_dir}")
+            logger.debug(f"Unzipping {cmdlinetools_installer_name} to {sdk_dir}")
             if (sdk_dir / "cmdline-tools").exists():
                 logger.warning(
                     f"{sdk_dir / 'cmdline-tools'} already exists, overwrite? [y/N]"
@@ -259,27 +285,21 @@ if __name__ == "__main__":
                 if input().lower() == "y":
                     rmtree(sdk_dir / "cmdline-tools")
                     (sdk_dir / "cmdline-tools").mkdir(parents=True, exist_ok=True)
-                    with zipfile.ZipFile(commandlinetools_installer_name) as z:
+                    with zipfile.ZipFile(cmdlinetools_installer_name) as z:
                         z.extractall(sdk_dir / "cmdline-tools")
                     (sdk_dir / "cmdline-tools" / "cmdline-tools").rename(
                         sdk_dir / "cmdline-tools" / "latest"
                     )
                 else:
                     logger.info("Skipping Android command line tools installation")
+
             logger.info("Cleaning up Android command line tools installer...")
-            os.remove(commandlinetools_installer_name)
+            os.remove(cmdlinetools_installer_name)
+
             logger.info("Attempting to update PATH...")
-            u_env = winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment")
-            path_update = subprocess.run(
-                [
-                    "pwsh",
-                    "-c",
-                    '[Environment]::SetEnvironmentVariable("Path",'
-                    f' "{winreg.QueryValueEx(u_env, "Path")[0]};%LocalAppData%\\Android\\Sdk\\cmdline-tools\\latest\\bin",'
-                    " [System.EnvironmentVariableTarget]::User)",
-                ]
+            path_update = append_to_path(
+                "%LocalAppData%\\Android\\Sdk\\cmdline-tools\\latest\\bin", "user"
             )
-            u_env.Close()
             if path_update.returncode == 0:
                 logger.info("Updated PATH")
             else:
@@ -296,11 +316,12 @@ if __name__ == "__main__":
                     " install manually:"
                     " https://docs.flutter.dev/get-started/install/windows#android-setup"
                 )
+                input("Press enter to exit...")
                 sys.exit(1)
 
             logger.info(
                 "Attempting to install Android platform-tools, platforms;android-32,"
-                " build-tools;32.0.0, emulator..."
+                " build-tools;32.0.0, emulator, Google USB Driver..."
             )
             sdkmanager_install = subprocess.run(
                 [
@@ -310,19 +331,33 @@ if __name__ == "__main__":
                     "platforms;android-32",
                     "build-tools;32.0.0",
                     "emulator",
+                    "extras;google;usb_driver",
                 ]
             )
             if sdkmanager_install.returncode == 0:
                 logger.info(
                     "Android platform-tools, platforms;android-32, build-tools;32.0.0,"
-                    " emulator successfully installed"
+                    " emulator, Google USB Driver successfully installed"
                 )
+                logger.info("Attempting to update PATH...")
+                path_update = append_to_path(
+                    "%LocalAppData%\\Android\\Sdk\\platform-tools", "user"
+                )
+                if path_update.returncode == 0:
+                    logger.info("Updated PATH")
+                else:
+                    logger.warning(
+                        "Failed to update PATH, may be caused by permission issues,"
+                        " please update PATH manually"
+                    )
+                update_path()
             else:
                 logger.error(
                     "Failed to install Android command line tools, please continue"
                     " install manually:"
                     " https://docs.flutter.dev/get-started/install/windows#android-setup"
                 )
+                input("Press enter to exit...")
                 sys.exit(1)
             sdkmanager_update = subprocess.run(
                 [
@@ -332,6 +367,16 @@ if __name__ == "__main__":
             )
             if sdkmanager_update.returncode == 0:
                 logger.info("Android toolchain successfully updated")
+
+        else:
+            logger.error(
+                "Failed to install Android command line tools, please continue"
+                " install manually:"
+                " https://docs.flutter.dev/get-started/install/windows#android-setup"
+            )
+            input("Press enter to exit...")
+            sys.exit(1)
+
     else:
         logger.info("Skipping Android toolchain installation")
 
